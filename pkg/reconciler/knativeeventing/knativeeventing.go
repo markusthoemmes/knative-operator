@@ -29,7 +29,6 @@ import (
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/cache"
 
 	eventingv1alpha1 "knative.dev/operator/pkg/apis/operator/v1alpha1"
@@ -56,7 +55,6 @@ type Reconciler struct {
 	// Listers index properties about resources
 	knativeEventingLister listers.KnativeEventingLister
 	config                mf.Manifest
-	eventings             sets.String
 }
 
 // Check that our Reconciler implements controller.Reconciler
@@ -82,14 +80,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string) error {
 	}
 
 	if original.GetDeletionTimestamp() != nil {
-		if _, ok := r.eventings[key]; ok {
-			delete(r.eventings, key)
-		}
 		return r.delete(original)
 	}
-
-	// Keep track of the number of Eventings in the cluster
-	r.eventings.Insert(key)
 
 	// Don't modify the informers copy.
 	knativeEventing := original.DeepCopy()
@@ -248,24 +240,22 @@ func (r *Reconciler) delete(instance *eventingv1alpha1.KnativeEventing) error {
 	}
 	r.Logger.Info("Deleting resources")
 	var RBAC = mf.Any(role, rolebinding)
-	if len(r.eventings) == 0 {
-		// delete the deployments first
-		if err := r.config.Filter(mf.ByKind("Deployment")).Delete(); err != nil {
-			r.Logger.Warn(err, "Error deleting deployments")
-			return err
-		}
-		if err := r.config.Filter(mf.NoCRDs, mf.None(RBAC)).Delete(); err != nil {
-			r.Logger.Warn(err, "Error deleting resources")
-			return err
-		}
-		// Delete Roles last, as they may be useful for human operators to clean up.
-		if err := r.config.Filter(RBAC).Delete(); err != nil {
-			r.Logger.Warn(err, "Error deleting RBAC resources")
-			return err
-		}
-
-		r.Logger.Info("Resources are deleted")
+	// delete the deployments first
+	if err := r.config.Filter(mf.ByKind("Deployment")).Delete(); err != nil {
+		r.Logger.Warn(err, "Error deleting deployments")
+		return err
 	}
+	if err := r.config.Filter(mf.NoCRDs, mf.None(RBAC)).Delete(); err != nil {
+		r.Logger.Warn(err, "Error deleting resources")
+		return err
+	}
+	// Delete Roles last, as they may be useful for human operators to clean up.
+	if err := r.config.Filter(RBAC).Delete(); err != nil {
+		r.Logger.Warn(err, "Error deleting RBAC resources")
+		return err
+	}
+
+	r.Logger.Info("Resources are deleted")
 	// The deletionTimestamp might've changed. Fetch the resource again.
 	refetched, err := r.knativeEventingLister.KnativeEventings(instance.Namespace).Get(instance.Name)
 	if err != nil {

@@ -22,7 +22,6 @@ import (
 	"github.com/go-logr/zapr"
 	mfc "github.com/manifestival/client-go-client"
 	mf "github.com/manifestival/manifestival"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/cache"
 
 	"knative.dev/operator/pkg/apis/operator/v1alpha1"
@@ -57,7 +56,6 @@ func NewController(
 	c := &Reconciler{
 		Base:                  rbase.NewBase(ctx, controllerAgentName, cmw),
 		knativeEventingLister: knativeEventingInformer.Lister(),
-		eventings:             sets.String{},
 	}
 
 	koDataDir := os.Getenv("KO_DATA_PATH")
