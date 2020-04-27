@@ -28,7 +28,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
 	servingv1alpha1 "knative.dev/operator/pkg/apis/operator/v1alpha1"
 	knsreconciler "knative.dev/operator/pkg/client/injection/reconciler/operator/v1alpha1/knativeserving"
 	listers "knative.dev/operator/pkg/client/listers/operator/v1alpha1"
@@ -70,15 +69,36 @@ var _ knsreconciler.Interface = (*Reconciler)(nil)
 var _ knsreconciler.Finalizer = (*Reconciler)(nil)
 
 // FinalizeKind removes all resources after deletion of a KnativeServing.
-func (r *Reconciler) FinalizeKind(ctx context.Context, original *servingv1alpha1.KnativeServing) pkgreconciler.Event {
+func (r *Reconciler) FinalizeKind(ctx context.Context, instance *servingv1alpha1.KnativeServing) pkgreconciler.Event {
 	logger := logging.FromContext(ctx)
 
-	key, err := cache.MetaNamespaceKeyFunc(original)
-	if err != nil {
-		logger.Errorf("invalid resource key: %s", key)
+	if len(instance.GetFinalizers()) == 0 || instance.GetFinalizers()[0] != finalizerName {
 		return nil
 	}
-	return r.delete(ctx, original)
+	logger.Info("Deleting resources")
+	manifest, err := r.transform(ctx, instance)
+	if err != nil {
+		return err
+	}
+	var RBAC = mf.Any(mf.ByKind("Role"), mf.ByKind("ClusterRole"), mf.ByKind("RoleBinding"), mf.ByKind("ClusterRoleBinding"))
+	if err := manifest.Filter(mf.ByKind("Deployment")).Delete(); err != nil {
+		return err
+	}
+	if err := manifest.Filter(mf.NoCRDs, mf.None(RBAC)).Delete(); err != nil {
+		return err
+	}
+	// Delete Roles last, as they may be useful for human operators to clean up.
+	if err := manifest.Filter(RBAC).Delete(); err != nil {
+		return err
+	}
+	// The deletionTimestamp might've changed. Fetch the resource again.
+	refetched, err := r.knativeServingLister.KnativeServings(instance.Namespace).Get(instance.Name)
+	if err != nil {
+		return err
+	}
+	refetched.SetFinalizers(refetched.GetFinalizers()[1:])
+	_, err = r.knativeServingClientSet.OperatorV1alpha1().KnativeServings(refetched.Namespace).Update(refetched)
+	return err
 }
 
 // ReconcileKind compares the actual state with the desired, and attempts to
@@ -213,35 +233,6 @@ func (r *Reconciler) ensureFinalizer(ctx context.Context, manifest *mf.Manifest,
 	}
 	instance.SetFinalizers(append(instance.GetFinalizers(), finalizerName))
 	instance, err := r.knativeServingClientSet.OperatorV1alpha1().KnativeServings(instance.Namespace).Update(instance)
-	return err
-}
-
-// delete all the resources in the release manifest
-func (r *Reconciler) delete(ctx context.Context, instance *servingv1alpha1.KnativeServing) error {
-	logger := logging.FromContext(ctx)
-
-	if len(instance.GetFinalizers()) == 0 || instance.GetFinalizers()[0] != finalizerName {
-		return nil
-	}
-	logger.Info("Deleting resources")
-	var RBAC = mf.Any(mf.ByKind("Role"), mf.ByKind("ClusterRole"), mf.ByKind("RoleBinding"), mf.ByKind("ClusterRoleBinding"))
-	if err := r.config.Filter(mf.ByKind("Deployment")).Delete(); err != nil {
-		return err
-	}
-	if err := r.config.Filter(mf.NoCRDs, mf.None(RBAC)).Delete(); err != nil {
-		return err
-	}
-	// Delete Roles last, as they may be useful for human operators to clean up.
-	if err := r.config.Filter(RBAC).Delete(); err != nil {
-		return err
-	}
-	// The deletionTimestamp might've changed. Fetch the resource again.
-	refetched, err := r.knativeServingLister.KnativeServings(instance.Namespace).Get(instance.Name)
-	if err != nil {
-		return err
-	}
-	refetched.SetFinalizers(refetched.GetFinalizers()[1:])
-	_, err = r.knativeServingClientSet.OperatorV1alpha1().KnativeServings(refetched.Namespace).Update(refetched)
 	return err
 }
 

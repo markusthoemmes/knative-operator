@@ -239,18 +239,22 @@ func (r *Reconciler) delete(instance *eventingv1alpha1.KnativeEventing) error {
 		return nil
 	}
 	r.Logger.Info("Deleting resources")
+	manifest, err := r.transform(instance)
+	if err != nil {
+		return err
+	}
 	var RBAC = mf.Any(role, rolebinding)
 	// delete the deployments first
-	if err := r.config.Filter(mf.ByKind("Deployment")).Delete(); err != nil {
+	if err := manifest.Filter(mf.ByKind("Deployment")).Delete(); err != nil {
 		r.Logger.Warn(err, "Error deleting deployments")
 		return err
 	}
-	if err := r.config.Filter(mf.NoCRDs, mf.None(RBAC)).Delete(); err != nil {
+	if err := manifest.Filter(mf.NoCRDs, mf.None(RBAC)).Delete(); err != nil {
 		r.Logger.Warn(err, "Error deleting resources")
 		return err
 	}
 	// Delete Roles last, as they may be useful for human operators to clean up.
-	if err := r.config.Filter(RBAC).Delete(); err != nil {
+	if err := manifest.Filter(RBAC).Delete(); err != nil {
 		r.Logger.Warn(err, "Error deleting RBAC resources")
 		return err
 	}
