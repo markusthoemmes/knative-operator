@@ -18,12 +18,10 @@ package knativeserving
 
 import (
 	"context"
-	"fmt"
 
 	mf "github.com/manifestival/manifestival"
 	clientset "knative.dev/operator/pkg/client/clientset/versioned"
 
-	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -43,10 +41,7 @@ import (
 )
 
 const (
-	finalizerName  = "delete-knative-serving-manifest"
-	creationChange = "creation"
-	editChange     = "edit"
-	deletionChange = "deletion"
+	finalizerName = "delete-knative-serving-manifest"
 )
 
 var (
@@ -66,7 +61,6 @@ type Reconciler struct {
 	// Listers index properties about resources
 	knativeServingLister listers.KnativeServingLister
 	config               mf.Manifest
-	servings             map[string]int64
 	// Platform-specific behavior to affect the transform
 	platform common.Platforms
 }
@@ -84,55 +78,14 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, original *servingv1alpha1
 		logger.Errorf("invalid resource key: %s", key)
 		return nil
 	}
-	if _, ok := r.servings[key]; ok {
-		delete(r.servings, key)
-	}
 	return r.delete(ctx, original)
 }
 
 // ReconcileKind compares the actual state with the desired, and attempts to
 // converge the two.
-func (r *Reconciler) ReconcileKind(ctx context.Context, original *servingv1alpha1.KnativeServing) pkgreconciler.Event {
+func (r *Reconciler) ReconcileKind(ctx context.Context, ks *servingv1alpha1.KnativeServing) pkgreconciler.Event {
 	logger := logging.FromContext(ctx)
-
-	// Convert the namespace/name string into a distinct namespace and name
-	key, err := cache.MetaNamespaceKeyFunc(original)
-	if err != nil {
-		logger.Errorf("invalid resource key: %s", key)
-		return nil
-	}
-
-	// Keep track of the number and generation of KnativeServings in the cluster.
-	newGen := original.Generation
-	if oldGen, ok := r.servings[key]; ok {
-		if newGen > oldGen {
-			r.statsReporter.ReportKnativeservingChange(key, editChange)
-		} else if newGen < oldGen {
-			return fmt.Errorf("reconciling obsolete generation of KnativeServing %s: newGen = %d and oldGen = %d", key, newGen, oldGen)
-		}
-	} else {
-		// No metrics are emitted when newGen > 1: the first reconciling of
-		// a new operator on an existing KnativeServing resource.
-		if newGen == 1 {
-			r.statsReporter.ReportKnativeservingChange(key, creationChange)
-		}
-	}
-	r.servings[key] = original.Generation
-
-	// Reconcile this copy of the KnativeServing resource and then write back any status
-	// updates regardless of whether the reconciliation errored out.
-	err = r.reconcile(ctx, original)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (r *Reconciler) reconcile(ctx context.Context, ks *servingv1alpha1.KnativeServing) error {
-	logger := logging.FromContext(ctx)
-
-	reqLogger := logger.With(zap.String("Request.Namespace", ks.Namespace)).With("Request.Name", ks.Name)
-	reqLogger.Infow("Reconciling KnativeServing", "status", ks.Status)
+	logger.Infow("Reconciling KnativeServing", "status", ks.Status)
 
 	stages := []func(context.Context, *mf.Manifest, *servingv1alpha1.KnativeServing) error{
 		r.ensureFinalizer,
@@ -153,7 +106,7 @@ func (r *Reconciler) reconcile(ctx context.Context, ks *servingv1alpha1.KnativeS
 			return err
 		}
 	}
-	reqLogger.Infow("Reconcile stages complete", "status", ks.Status)
+	logger.Infow("Reconcile stages complete", "status", ks.Status)
 	return nil
 }
 
@@ -272,17 +225,15 @@ func (r *Reconciler) delete(ctx context.Context, instance *servingv1alpha1.Knati
 	}
 	logger.Info("Deleting resources")
 	var RBAC = mf.Any(mf.ByKind("Role"), mf.ByKind("ClusterRole"), mf.ByKind("RoleBinding"), mf.ByKind("ClusterRoleBinding"))
-	if len(r.servings) == 0 {
-		if err := r.config.Filter(mf.ByKind("Deployment")).Delete(); err != nil {
-			return err
-		}
-		if err := r.config.Filter(mf.NoCRDs, mf.None(RBAC)).Delete(); err != nil {
-			return err
-		}
-		// Delete Roles last, as they may be useful for human operators to clean up.
-		if err := r.config.Filter(RBAC).Delete(); err != nil {
-			return err
-		}
+	if err := r.config.Filter(mf.ByKind("Deployment")).Delete(); err != nil {
+		return err
+	}
+	if err := r.config.Filter(mf.NoCRDs, mf.None(RBAC)).Delete(); err != nil {
+		return err
+	}
+	// Delete Roles last, as they may be useful for human operators to clean up.
+	if err := r.config.Filter(RBAC).Delete(); err != nil {
+		return err
 	}
 	// The deletionTimestamp might've changed. Fetch the resource again.
 	refetched, err := r.knativeServingLister.KnativeServings(instance.Namespace).Get(instance.Name)
