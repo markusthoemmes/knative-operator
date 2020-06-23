@@ -16,6 +16,9 @@ limitations under the License.
 package main
 
 import (
+	"context"
+
+	"knative.dev/operator/pkg/reconciler/common"
 	"knative.dev/operator/pkg/reconciler/knativeeventing"
 	"knative.dev/operator/pkg/reconciler/knativeserving"
 	"knative.dev/pkg/injection/sharedmain"
@@ -23,7 +26,10 @@ import (
 
 func main() {
 	sharedmain.Main("knative-operator",
-		knativeserving.NewController,
+		knativeserving.NewControllerWithExtension(func(ctx context.Context) common.Extension {
+			// openshift.NewServingExtension(ctx)
+			return nil
+		}),
 		knativeeventing.NewController,
 	)
 }
